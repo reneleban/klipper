@@ -2194,6 +2194,25 @@ z_offset:
 #   "SAMPLES_TOLERANCE_RETRIES" command parameter. The default is zero
 #   which causes an error to be reported on the first sample that
 #   exceeds samples_tolerance.
+#samples_tolerance_retry_offset: 0
+#   The distance (in mm) to move laterally between samples_tolerance
+#   retries. If set to a positive value then each retry probes at a
+#   different XY position - the retries follow an outward spiral
+#   around the original position, with the rings and the points along
+#   each ring spaced this distance apart. The first seven retries
+#   remain within this distance of the original position. The
+#   toolhead is retracted before each lateral move; if the next point
+#   can not be reached (XY not homed, or the toolhead or probe would
+#   leave the axis range) the retry is made at the original position
+#   and this is reported. The probe reports the position that was
+#   actually probed; note that bed_mesh attributes the result to the
+#   requested grid point regardless and does not avoid faulty_region
+#   areas, and screws_tilt_adjust attributes it to the screw position,
+#   so this value should be small relative to those distances.
+#   PROBE_CALIBRATE always probes at the requested position. The
+#   maximum is 5mm. It may be possible to change this value at runtime
+#   via a "SAMPLES_TOLERANCE_RETRY_OFFSET" command parameter. The
+#   default is 0, which retries at the original position.
 #activate_gcode:
 #   A list of G-Code commands to execute prior to each probe attempt.
 #   See docs/Command_Templates.md for G-Code format. This may be
@@ -2262,6 +2281,7 @@ control_pin:
 #samples_result:
 #samples_tolerance:
 #samples_tolerance_retries:
+#samples_tolerance_retry_offset:
 #   See the "probe" section for information on these parameters.
 ```
 
@@ -2313,6 +2333,7 @@ z_offset:
 #samples_result:
 #samples_tolerance:
 #samples_tolerance_retries:
+#samples_tolerance_retry_offset:
 #activate_gcode:
 #deactivate_gcode:
 #deactivate_on_each_sample:
@@ -5393,6 +5414,7 @@ sensor_type:
 #samples_result:
 #samples_tolerance:
 #samples_tolerance_retries:
+#samples_tolerance_retry_offset:
 #activate_gcode:
 #deactivate_gcode:
 #   See the "[probe]" section for a description of the above parameters.

@@ -1191,7 +1191,8 @@ see the [probe calibrate guide](Probe_Calibrate.md)).
 #### PROBE
 `PROBE [PROBE_SPEED=<mm/s>] [LIFT_SPEED=<mm/s>] [SAMPLES=<count>]
 [SAMPLE_RETRACT_DIST=<mm>] [SAMPLES_TOLERANCE=<mm>]
-[SAMPLES_TOLERANCE_RETRIES=<count>] [SAMPLES_RESULT=median|average]`:
+[SAMPLES_TOLERANCE_RETRIES=<count>] [SAMPLES_TOLERANCE_RETRY_OFFSET=<mm>]
+[SAMPLES_RESULT=median|average]`:
 Move the nozzle downwards until the probe triggers. If any of the
 optional parameters are provided they override their equivalent
 setting in the [probe config section](Config_Reference.md#probe).

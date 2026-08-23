@@ -442,6 +442,17 @@ is defined):
   run prior to the macro containing this reference.
 - `last_z_result`: This value is deprecated; it will be removed in the
   near future.
+- `retry_count`: The number of samples_tolerance retries during the
+  most recent probe of a single point (a PROBE command, or one point
+  of a bed_mesh or z_tilt run).
+- `retry_total`: The total number of samples_tolerance retries since
+  the last restart.
+- `last_retry_offset`: The XY offset (in mm) from the requested
+  position at which the most recent probe of a single point was
+  taken. This is zero unless samples_tolerance_retry_offset is
+  configured and the retry was actually taken at an offset position.
+  For probe_eddy_current these three
+  values refer to the regular (non-tap) probing session.
 
 ## pwm_cycle_time
 

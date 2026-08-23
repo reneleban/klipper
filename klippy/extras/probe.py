@@ -3,7 +3,7 @@
 # Copyright (C) 2017-2026  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging
+import logging, math
 import pins
 from . import manual_probe
 
@@ -36,6 +36,13 @@ def calc_probe_z_average(positions, method='average'):
 ######################################################################
 
 # Helper to implement common probing commands
+# Largest permitted samples_tolerance_retry_offset (mm) - beyond a few
+# millimeters a retry measures a different part of the bed
+MAX_RETRY_OFFSET = 5.
+# Minimum clearance above the trigger position before a lateral retry
+# move (mm) - some probes configure sample_retract_dist as zero
+RETRY_MIN_CLEARANCE = 1.
+
 class ProbeCommandHelper:
     def __init__(self, config, probe, query_endstop=None,
                  can_set_z_offset=True):
@@ -107,8 +114,13 @@ class ProbeCommandHelper:
     def cmd_PROBE_CALIBRATE(self, gcmd):
         manual_probe.verify_no_manual_probe(self.printer)
         params = self.probe.get_probe_params(gcmd)
-        # Perform initial probe
-        ppos = run_single_probe(self.probe, gcmd)
+        # Perform initial probe (at the requested position - a
+        # samples_tolerance retry offset would calibrate elsewhere)
+        cal_params = dict(gcmd.get_command_parameters())
+        cal_params['SAMPLES_TOLERANCE_RETRY_OFFSET'] = '0'
+        gcode = self.printer.lookup_object('gcode')
+        cal_gcmd = gcode.create_gcode_command("", "", cal_params)
+        ppos = run_single_probe(self.probe, cal_gcmd)
         # Move away from the bed
         curpos = self.printer.lookup_object('toolhead').get_position()
         curpos[2] += 5.
@@ -293,6 +305,12 @@ class ProbeParameterHelper:
                                                  minval=0.)
         self.samples_retries = config.getint('samples_tolerance_retries', 0,
                                              minval=0)
+        self.samples_retry_offset = config.getfloat(
+            'samples_tolerance_retry_offset', 0., minval=0.,
+            maxval=MAX_RETRY_OFFSET)
+        if not math.isfinite(self.samples_retry_offset):
+            raise config.error("samples_tolerance_retry_offset must be"
+                               " a finite number")
     def get_probe_params(self, gcmd=None):
         if gcmd is None:
             gcmd = self.dummy_gcode_cmd
@@ -306,13 +324,36 @@ class ProbeParameterHelper:
         samples_retries = gcmd.get_int("SAMPLES_TOLERANCE_RETRIES",
                                        self.samples_retries, minval=0)
         samples_result = gcmd.get("SAMPLES_RESULT", self.samples_result)
+        samples_retry_offset = gcmd.get_float("SAMPLES_TOLERANCE_RETRY_OFFSET",
+                                              self.samples_retry_offset,
+                                              minval=0.,
+                                              maxval=MAX_RETRY_OFFSET)
+        if not math.isfinite(samples_retry_offset):
+            raise gcmd.error("SAMPLES_TOLERANCE_RETRY_OFFSET must be"
+                             " a finite number")
         return {'probe_speed': probe_speed,
                 'lift_speed': lift_speed,
                 'samples': samples,
                 'sample_retract_dist': sample_retract_dist,
                 'samples_tolerance': samples_tolerance,
                 'samples_tolerance_retries': samples_retries,
-                'samples_result': samples_result}
+                'samples_result': samples_result,
+                'samples_tolerance_retry_offset': samples_retry_offset}
+
+# Calculate the XY offset of the given samples_tolerance retry on an
+# outward spiral around the original position.  The rings and the
+# points along each ring are 'spacing' apart; retry 1 is the first
+# point on the innermost ring.
+def calc_retry_offset(retry, spacing):
+    radius = spacing
+    idx = retry - 1
+    while True:
+        count = int(2. * math.pi * radius / spacing) + 1
+        if idx < count:
+            angle = 2. * math.pi * idx / count
+            return [math.cos(angle) * radius, math.sin(angle) * radius]
+        idx -= count
+        radius += spacing
 
 # Helper to track multiple probe attempts in a single command
 class SampleAveragingHelper:
@@ -323,6 +364,9 @@ class SampleAveragingHelper:
         # Session state
         self.hw_probe_session = None
         self.results = []
+        # Retry statistics (see get_status)
+        self.retry_count = self.retry_total = 0
+        self.last_retry_offset = [0., 0.]
         # Register event handlers
         self.printer.register_event_handler("gcode:command_error",
                                             self._handle_command_error)
@@ -371,13 +415,75 @@ class SampleAveragingHelper:
             gcode.respond_info("probe: at %.3f,%.3f bed will contact at z=%.6f"
                                % (epos.bed_x, epos.bed_y, epos.bed_z))
         return epos
+    def get_status(self, eventtime):
+        return {'retry_count': self.retry_count,
+                'retry_total': self.retry_total,
+                'last_retry_offset': list(self.last_retry_offset)}
+    def _retry_target(self, toolhead, startxy, retries, retry_offset):
+        # Next point of the retry spiral, or None if it can not be
+        # reached (XY not homed, or toolhead or probe would leave the
+        # axis range)
+        curtime = self.printer.get_reactor().monotonic()
+        if 'xy' not in toolhead.get_status(curtime)['homed_axes']:
+            return None
+        offset = calc_retry_offset(retries, retry_offset)
+        target = [startxy[0] + offset[0], startxy[1] + offset[1]]
+        probe = self.printer.lookup_object('probe', None)
+        poffsets = probe.get_offsets() if probe is not None else (0., 0.)
+        kin_status = toolhead.get_kinematics().get_status(curtime)
+        amin, amax = kin_status['axis_minimum'], kin_status['axis_maximum']
+        for i in range(2):
+            if not (amin[i] <= target[i] <= amax[i]
+                    and amin[i] <= target[i] + poffsets[i] <= amax[i]):
+                return None
+        return target
+    def _retry_move(self, gcmd, toolhead, probexy, startxy, retries, params,
+                    z_range):
+        # Retract at the current position (never move laterally while
+        # in contact with the bed), then optionally move to the next
+        # point of the retry spiral
+        retry_offset = params['samples_tolerance_retry_offset']
+        lift = params['sample_retract_dist']
+        if retry_offset:
+            lift = max(lift, RETRY_MIN_CLEARANCE)
+        msg = "Probe samples exceed tolerance (range %.4f > %.4f)." % z_range
+        if not retry_offset:
+            gcmd.respond_info(msg + " Retrying...")
+        cur_z = toolhead.get_position()[2]
+        toolhead.manual_move(probexy + [cur_z + lift], params['lift_speed'])
+        if not retry_offset:
+            return probexy
+        target = self._retry_target(toolhead, startxy, retries, retry_offset)
+        if target is None:
+            gcmd.respond_info(msg + " Retry offset not reachable,"
+                              " retrying at the original position...")
+            target = startxy
+        try:
+            toolhead.manual_move(target + [cur_z + lift],
+                                 params['lift_speed'])
+        except self.printer.command_error as e:
+            gcmd.respond_info(msg + " Retry offset move rejected (%s),"
+                              " retrying at the original position..."
+                              % (str(e),))
+            target = startxy
+            toolhead.manual_move(target + [cur_z + lift],
+                                 params['lift_speed'])
+        self.last_retry_offset = [target[0] - startxy[0],
+                                  target[1] - startxy[1]]
+        if target is not startxy:
+            gcmd.respond_info(msg + " Retrying at %.3f,%.3f..."
+                              % (target[0], target[1]))
+        return target
     def run_probe(self, gcmd):
         if self.hw_probe_session is None:
             self._probe_state_error()
         params = self.param_helper.get_probe_params(gcmd)
         toolhead = self.printer.lookup_object('toolhead')
-        probexy = toolhead.get_position()[:2]
+        probexy = list(toolhead.get_position()[:2])
+        startxy = list(probexy)
         retries = 0
+        self.retry_count = 0
+        self.last_retry_offset = [0., 0.]
         positions = []
         sample_count = params['samples']
         while len(positions) < sample_count:
@@ -386,12 +492,18 @@ class SampleAveragingHelper:
             positions.append(pos)
             # Check samples tolerance
             z_positions = [p.bed_z for p in positions]
-            if max(z_positions)-min(z_positions) > params['samples_tolerance']:
+            z_range = max(z_positions) - min(z_positions)
+            if z_range > params['samples_tolerance']:
                 if retries >= params['samples_tolerance_retries']:
                     raise gcmd.error("Probe samples exceed samples_tolerance")
-                gcmd.respond_info("Probe samples exceed tolerance. Retrying...")
                 retries += 1
+                self.retry_count = retries
+                self.retry_total += 1
                 positions = []
+                probexy = self._retry_move(
+                    gcmd, toolhead, probexy, startxy, retries, params,
+                    (z_range, params['samples_tolerance']))
+                continue
             # Retract
             if len(positions) < sample_count:
                 cur_z = toolhead.get_position()[2]
@@ -623,7 +735,9 @@ class PrinterProbe:
     def get_offsets(self, gcmd=None):
         return self.probe_offsets.get_offsets(gcmd)
     def get_status(self, eventtime):
-        return self.cmd_helper.get_status(eventtime)
+        status = self.cmd_helper.get_status(eventtime)
+        status.update(self.probe_session.get_status(eventtime))
+        return status
     def start_probe_session(self, gcmd):
         return self.probe_session.start_probe_session(gcmd)
 

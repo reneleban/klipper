@@ -1017,6 +1017,7 @@ class EddyParameterHelper:
                 'sample_retract_dist': samp_retract_dist,
                 'samples_tolerance': samp_tolerance,
                 'samples_tolerance_retries': samp_retries,
+                'samples_tolerance_retry_offset': 0.,
                 'samples_result': samples_result}
 
 # Main "printer object"
@@ -1062,7 +1063,9 @@ class PrinterEddyProbe:
             return (0., 0., 0.)
         return self.probe_offsets.get_offsets(gcmd)
     def get_status(self, eventtime):
-        return self.cmd_helper.get_status(eventtime)
+        status = self.cmd_helper.get_status(eventtime)
+        status.update(self.eddy_descend_session.get_status(eventtime))
+        return status
     def start_probe_session(self, gcmd):
         method = gcmd.get('METHOD', 'automatic').lower()
         if method in ('scan', 'rapid_scan'):

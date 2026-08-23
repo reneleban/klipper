@@ -296,7 +296,9 @@ class PrinterBLTouch:
     def get_offsets(self, gcmd=None):
         return self.probe_offsets.get_offsets(gcmd)
     def get_status(self, eventtime):
-        return self.cmd_helper.get_status(eventtime)
+        status = self.cmd_helper.get_status(eventtime)
+        status.update(self.probe_session.get_status(eventtime))
+        return status
     def start_probe_session(self, gcmd):
         return self.probe_session.start_probe_session(gcmd)
 

@@ -711,6 +711,7 @@ class LoadCellPrinterProbe:
         status = self._cmd_helper.get_status(eventtime)
         status.update(self._load_cell.get_status(eventtime))
         status.update(self._tapping_move.get_status(eventtime))
+        status.update(self._probe_session.get_status(eventtime))
         return status
 
 
