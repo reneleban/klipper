@@ -58,6 +58,19 @@ serial:
 #   sending a Klipper command to the micro-controller so that it can
 #   reset itself. The default is 'arduino' if the micro-controller
 #   communicates over a serial port, 'command' otherwise.
+#trsync_timeout: 0.025
+#   The maximum time (in seconds) that a micro-controller may go
+#   without a trigger synchronization report from a peer
+#   micro-controller during a multi-mcu homing or probing move before
+#   the move is aborted with a "Communication timeout during homing"
+#   error. This value is read from the micro-controller that hosts the
+#   endstop or probe pin, and it has no effect if the endstop and all
+#   of the steppers it stops are on the same micro-controller.
+#   Raising this value increases the possible stepper overshoot during
+#   homing and probing in direct proportion (this applies to XY homing
+#   as well if those endstops are on another micro-controller) - see
+#   docs/Multi_MCU_Homing.md before changing it. The minimum is 0.010
+#   and the maximum is 0.100 seconds. The default is 0.025 seconds.
 ```
 
 ### [mcu my_extra_mcu]

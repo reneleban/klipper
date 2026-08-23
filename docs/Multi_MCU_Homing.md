@@ -25,6 +25,20 @@ taken when configuring multi-mcu homing to account for this type of
 overshoot. Using slower homing or probing speeds can reduce the
 overshoot.
 
+The 25ms limit is the default of the `trsync_timeout` option in the
+[mcu config section](Config_Reference.md#mcu) of the micro-controller
+that hosts the endstop. Raising it increases the possible overshoot in
+direct proportion: at a probing speed of 5mm/s the default 0.025s
+bounds the overshoot at 0.125mm, while a `trsync_timeout` of 0.050s
+allows up to 0.250mm. The option applies to every endstop hosted by
+that micro-controller, so an XY endstop homing at 80mm/s would
+overshoot up to 4mm at 0.050s. The mechanical design must be able to
+absorb that overshoot without damage - on a nozzle based probe this
+is force applied directly to the bed surface. Raising the value does not fix
+the underlying condition: a micro-controller that regularly fails to
+report within 25ms has a communication problem (CAN bus bitrate, bus
+load, queue depth, or host latency) that should be investigated.
+
 Stepper motor overshoot should not adversely impact the precision of
 the homing and probing procedure. The Klipper code will detect the
 overshoot and account for it in its calculations. However, it is

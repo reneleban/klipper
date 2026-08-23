@@ -286,6 +286,7 @@ class TriggerDispatch:
         ffi_main, ffi_lib = chelper.get_ffi()
         self._trdispatch = ffi_main.gc(ffi_lib.trdispatch_alloc(), ffi_lib.free)
         self._trsyncs = [MCU_trsync(mcu, self._trdispatch)]
+        self._logged_timeout = False
     def get_oid(self):
         return self._trsyncs[0].get_oid()
     def get_command_queue(self):
@@ -311,9 +312,14 @@ class TriggerDispatch:
     def start(self, print_time):
         reactor = self._mcu.get_printer().get_reactor()
         self._trigger_completion = reactor.completion()
-        expire_timeout = TRSYNC_TIMEOUT
+        expire_timeout = self._mcu.get_trsync_timeout()
         if len(self._trsyncs) == 1:
             expire_timeout = TRSYNC_SINGLE_MCU_TIMEOUT
+        elif not self._logged_timeout:
+            # Log once per endstop which mcu's trsync_timeout applies
+            logging.info("Multi-mcu homing: trsync_timeout=%.3f (from mcu"
+                         " '%s')", expire_timeout, self._mcu.get_name())
+            self._logged_timeout = True
         for i, trsync in enumerate(self._trsyncs):
             report_offset = float(i) / len(self._trsyncs)
             trsync.start(print_time, report_offset,
@@ -1162,10 +1168,17 @@ class MCU:
             def dummy_estimated_print_time(eventtime):
                 return 0.
             self.estimated_print_time = dummy_estimated_print_time
+        # Timeout for multi-mcu homing trigger synchronization (see
+        # docs/Multi_MCU_Homing.md - overshoot scales with this value)
+        self._trsync_timeout = config.getfloat('trsync_timeout',
+                                               TRSYNC_TIMEOUT,
+                                               minval=0.01, maxval=0.1)
     def get_name(self):
         return self._name
     def get_printer(self):
         return self._printer
+    def get_trsync_timeout(self):
+        return self._trsync_timeout
     def is_fileoutput(self):
         return self._printer.get_start_args().get('debugoutput') is not None
     # MCU Configuration wrappers
